@@ -7,6 +7,8 @@ type XLSX struct {
 	PSPReference    string
 	DateTransaction string
 	Advancement     float64
+	AdvancementBatch string
+	AdvancementCode int64
 	GrossCredit     float64
 	GrossDebit      float64
 	NetCredit       float64
@@ -51,7 +53,7 @@ type Payouts struct {
 	Batch            int64
 	Value            float64
 	BanlanceTransfer float64
-	Flag             string
+	Flag             string	
 }
 
 // Transaction ...

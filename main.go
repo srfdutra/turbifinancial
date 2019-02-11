@@ -14,9 +14,10 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	models "turbi.com.br/financial/models"
+
 	"github.com/360EntSecGroup-Skylar/excelize"
 	_ "github.com/go-sql-driver/mysql"
+	models "turbi.com.br/financial/models"
 )
 
 // PayoutsF ...
@@ -103,7 +104,7 @@ func ReconciliationAdyen(xlsxFull []models.XLSX) {
 					dt := strings.Split(xlsxFull[count].DateTransaction, " ")
 					dtf := dt[0] + "T" + dt[1] + "Z"
 					DateTransaction, err := time.Parse(time.RFC3339, dtf)
-					
+
 					stmt, err := db.Prepare("INSERT transaction SET transactionid=?,bookingid=?,token=?, parentid=?, value=? , operationDate=?, transactiondate=?, verb='REFUND',state='APPROVED', responseCode='CONSILATION', gateway = 'adyen' ")
 					checkErr(err)
 
@@ -164,7 +165,8 @@ func CreateDetails() (xlsx []models.XLSX, sumXLSX models.SumXLSX, dbValues []mod
 				lineXlsx.NetCredit, err = strconv.ParseFloat(record[15], 64)
 				lineXlsx.Commission, err = strconv.ParseFloat(record[16], 64)
 				lineXlsx.Advancement, err = strconv.ParseFloat(record[20], 64)
-
+				lineXlsx.AdvancementBatch = record[22]
+				lineXlsx.AdvancementCode, err = strconv.ParseInt(record[21], 10, 64)
 				// TESTE DE DICIONARIO
 				// var details = map[DBValues]string{}
 				// bdValuesDict := make(map[DBValues]string) //Shorthand and make
@@ -212,6 +214,7 @@ func GenerateXLSX(xlsxFull []models.XLSX, sumXLSX models.SumXLSX, dbValues []mod
 	xlsx := excelize.NewFile()
 	var balance []string
 	var batchValue float64
+	var batchValue2 float64
 	var dbcheckPSP models.DBCheckPSP
 
 	xlsx.NewSheet("Details")
@@ -232,19 +235,23 @@ func GenerateXLSX(xlsxFull []models.XLSX, sumXLSX models.SumXLSX, dbValues []mod
 	xlsx.SetCellValue("Details", "K1", "DB Value")
 	xlsx.SetCellValue("Details", "L1", "Adyen Operation")
 	xlsx.SetCellValue("Details", "M1", "Advancement")
+	xlsx.SetCellValue("Details", "N1", "Advancement Batch")
+	xlsx.SetCellValue("Details", "O1", "Advancement Code")
+	xlsx.SetCellValue("Details", "P1", "Sum Advancement")
 
 	xlsx.SetPanes("Details", `{"freeze":true,"split":false,"x_split":0,"y_split":1,"top_left_cell":"B1","active_pane":"topRight"}`)
-	xlsx.SetCellStyle("Details", "A1", "M1", styleHeader)
+	xlsx.SetCellStyle("Details", "A1", "P1", styleHeader)
 
 	// sort details
 	sort.Slice(xlsxFull[:], func(i, j int) bool {
-		return xlsxFull[i].Batch < xlsxFull[j].Batch
+		return xlsxFull[i].AdvancementBatch < xlsxFull[j].AdvancementBatch
 	})
 
 	col := "0"
 	count := 0
 	line := 2
 	batchB := xlsxFull[count].Batch
+	batchAdvancementB := xlsxFull[count].AdvancementBatch
 	for count < len(xlsxFull) {
 		col = strconv.Itoa(line)
 		xlsx.SetCellValue("Details", "A"+col, xlsxFull[count].Batch)
@@ -260,6 +267,8 @@ func GenerateXLSX(xlsxFull []models.XLSX, sumXLSX models.SumXLSX, dbValues []mod
 		xlsx.SetCellValue("Details", "K"+col, xlsxFull[count].DBvalue)
 		xlsx.SetCellValue("Details", "L"+col, 0)
 		xlsx.SetCellValue("Details", "M"+col, xlsxFull[count].Advancement)
+		xlsx.SetCellValue("Details", "N"+col, xlsxFull[count].AdvancementBatch)
+		xlsx.SetCellValue("Details", "O"+col, xlsxFull[count].AdvancementCode)
 
 		if xlsxFull[count].DBvalue == 0 {
 			xlsx.SetCellValue("Details", "L"+col, xlsxFull[count].GrossDebit)
@@ -287,12 +296,28 @@ func GenerateXLSX(xlsxFull []models.XLSX, sumXLSX models.SumXLSX, dbValues []mod
 					balance = append(balance, PayoutValue[i])
 					balance = append(balance, "")
 					batchValue = 0
+
 				}
 				i++
 			}
 			batchB = xlsxFull[count].Batch
 		}
+		if xlsxFull[count].AdvancementCode != 0 {
+			batchbatchAdvancement := xlsxFull[count].AdvancementBatch
+			if batchAdvancementB != batchbatchAdvancement {
+				l, _ := strconv.Atoi(col)
+				l = l - 1
+				if batchValue2 != 0 {
+					xlsx.SetCellValue("Details", "P"+strconv.Itoa(l), batchValue2)
+				}
+				batchValue2 = 0
+				batchAdvancementB = xlsxFull[count].AdvancementBatch
+			}
+		}
+
 		batchValue = batchValue + (xlsxFull[count].NetCredit - xlsxFull[count].NetDebit - xlsxFull[count].Advancement)
+		batchValue2 = batchValue2 + xlsxFull[count].Advancement //(xlsxFull[count].GrossCredit - xlsxFull[count].GrossDebit - xlsxFull[count].Commission)
+
 		line++
 		count++
 	}
@@ -303,6 +328,7 @@ func GenerateXLSX(xlsxFull []models.XLSX, sumXLSX models.SumXLSX, dbValues []mod
 	xlsx.SetCellFormula("Details", "L"+strconv.Itoa(line), "SUM(L1:L"+strconv.Itoa(line-1)+")")
 	xlsx.SetCellFormula("Details", "M"+strconv.Itoa(line), "SUM(M1:M"+strconv.Itoa(line-1)+")")
 	xlsx.SetCellFormula("Details", "L"+strconv.Itoa(line+1), "SUM(K"+strconv.Itoa(line)+"-L"+strconv.Itoa(line)+")")
+	xlsx.SetCellFormula("Details", "P"+strconv.Itoa(line), "SUM(P1:P"+strconv.Itoa(line-1)+")")
 
 	styleNumber, _ := xlsx.NewStyle(`{"number_format": 26, "decimal_places": 2}`)
 
@@ -316,12 +342,16 @@ func GenerateXLSX(xlsxFull []models.XLSX, sumXLSX models.SumXLSX, dbValues []mod
 	xlsx.SetCellStyle("Details", "J"+strconv.Itoa(line), "J"+strconv.Itoa(line), styleNumber)
 	xlsx.SetCellStyle("Details", "K"+strconv.Itoa(line), "K"+strconv.Itoa(line), styleNumber)
 	xlsx.SetCellStyle("Details", "L"+strconv.Itoa(line+1), "L"+strconv.Itoa(line+1), styleNumber)
+	xlsx.SetCellStyle("Details", "M"+strconv.Itoa(line+1), "O"+strconv.Itoa(line+1), styleNumber)
 
 	xlsx.SetColWidth("Details", "B", "C", 22)
 	xlsx.SetColWidth("Details", "E", "E", 22)
 	xlsx.SetColWidth("Details", "F", "K", 12)
 	xlsx.SetColWidth("Details", "L", "L", 15)
 	xlsx.SetColWidth("Details", "M", "M", 15)
+	xlsx.SetColWidth("Details", "N", "N", 25)
+	xlsx.SetColWidth("Details", "O", "O", 25)
+	xlsx.SetColWidth("Details", "P", "P", 25)
 
 	xlsx.NewSheet("PayOuts")
 	xlsx.SetCellValue("PayOuts", "A1", "Payout Date")
