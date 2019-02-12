@@ -2,20 +2,29 @@ package models
 
 // XLSX ...
 type XLSX struct {
-	Batch           string
-	PSPModification string
-	PSPReference    string
-	DateTransaction string
-	Advancement     float64
+	Batch            string
+	PSPModification  string
+	PSPReference     string
+	DateTransaction  string
+	Advancement      float64
 	AdvancementBatch string
+	AdvancementCode  int64
+	GrossCredit      float64
+	GrossDebit       float64
+	NetCredit        float64
+	NetDebit         float64
+	Commission       float64
+	DBvalue          float64
+	Flag             string
+}
+
+// AnalysisLot ...
+type AnalysisLot struct {
 	AdvancementCode int64
-	GrossCredit     float64
-	GrossDebit      float64
-	NetCredit       float64
-	NetDebit        float64
-	Commission      float64
-	DBvalue         float64
-	Flag            string
+	DB              float64
+	Adyen           float64
+	BSTurbi         float64
+	BSReal          float64
 }
 
 // SumXLSX ...
@@ -53,7 +62,7 @@ type Payouts struct {
 	Batch            int64
 	Value            float64
 	BanlanceTransfer float64
-	Flag             string	
+	Flag             string
 }
 
 // Transaction ...

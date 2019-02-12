@@ -34,7 +34,12 @@ var PSPcheckDB []models.DBCheckPSP
 
 // DBvaluesCheckDb ...
 var DBvaluesCheckDb []models.DBValues
+
+// AnalisysRFS ...
+var AnalisysRFS []models.AnalysisLot
+
 var ym string
+var loteAtual string
 
 //var dsn = "root:GreatTeam8*@tcp(127.0.0.1:3307)/dbsqlt890"
 var dsn = "root:000000@tcp(127.0.0.1:3306)/dbsqlt890"
@@ -47,7 +52,7 @@ func main() {
 	var dbValues []models.DBValues
 
 	if len(os.Args[1:]) != 0 {
-		if os.Args[1:][0] != "adyen" {
+		if os.Args[1:][0] != "adyen" && os.Args[1:][0] != "populatedb" {
 			ym = os.Args[1:][0]
 		} else {
 			ym = ""
@@ -61,7 +66,10 @@ func main() {
 	GetPayOut()
 	xlsx, sumXLSX, dbValues = CreateDetails()
 	CheckDB()
+	AnalisysCF()
 	GenerateXLSX(xlsx, sumXLSX, dbValues)
+
+	//PopulateDB(xlsx)
 
 	if len(os.Args[1:]) != 0 {
 		if os.Args[1:][0] == "adyen" {
@@ -69,6 +77,120 @@ func main() {
 		}
 	}
 
+	if len(os.Args[1:]) != 0 {
+		if os.Args[1:][0] == "populatedb" {
+			PopulateDB(xlsx)
+		}
+	}
+}
+
+// ReadBS ...
+func ReadBS(advancementBatch string) (commissionBS float64) {
+	xlsx, err := excelize.OpenFile("LotesAntecipados.xlsx")
+	checkErr(err)
+	commissionBS = 0
+	rows := xlsx.GetRows("LotesAntecipadosExterno")
+	x := 0
+	for x < len(rows) {
+		if fmt.Sprint(rows[x][0]) == advancementBatch && loteAtual != advancementBatch {
+			commissionBS, err = strconv.ParseFloat(rows[x][8], 64)
+			loteAtual = advancementBatch
+			return commissionBS
+		}
+		x++
+	}
+	return commissionBS
+}
+
+// ReadBSOperations ...
+func ReadBSOperations(batchCod string) (valueBS float64) {
+	xlsx, err := excelize.OpenFile("OperacoesPedidoExterno.xlsx")
+	checkErr(err)
+	valueBS = 0
+	rows := xlsx.GetRows("OperacoesPedidoExterno")
+	x := 0
+	for x < len(rows) {
+		if fmt.Sprint(rows[x][9]) == batchCod {
+			valueF := strings.Replace(rows[x][5], "R$", "", 10)
+			valueF = strings.Replace(valueF, ".", "", 10)
+			valueF = strings.Replace(valueF, ",", ".", 10)
+			valueF = strings.Replace(valueF, " ", "", 10)
+			valueBS, err = strconv.ParseFloat(valueF, 64)
+
+			return valueBS
+		}
+		x++
+	}
+	return valueBS
+}
+
+// AnalisysCF ...
+func AnalisysCF() {
+	results, err := db.Query(`select advancementCode,  sum(dbValue) as DB, sum(grossCredit- commissionAdyen) as Adyen,
+	sum(grossCredit -grossDebit - commissionBS - commissionAdyen) as BS from conciliation group by advancementCode `)
+	if err != nil {
+		panic(err.Error())
+	}
+
+	var analisysLot models.AnalysisLot
+
+	for results.Next() {
+
+		err = results.Scan(&analisysLot.AdvancementCode, &analisysLot.DB, &analisysLot.Adyen, &analisysLot.BSTurbi)
+		if err != nil {
+			panic(err.Error())
+		}
+		analisysLot.BSReal = ReadBSOperations(fmt.Sprint(analisysLot.AdvancementCode))
+		AnalisysRFS = append(AnalisysRFS, analisysLot)
+	}
+}
+
+// PopulateDB ...
+func PopulateDB(xlsxFull []models.XLSX) {
+	count := 0
+
+	for count < len(xlsxFull) {
+		dt := strings.Split(xlsxFull[count].DateTransaction, " ")
+		dtf := dt[0] + "T" + dt[1] + "Z"
+		DateTransaction, err := time.Parse(time.RFC3339, dtf)
+
+		dc := "C"
+		if xlsxFull[count].GrossCredit == 0 {
+			dc = "D"
+		}
+
+		commissionBS := ReadBS(xlsxFull[count].AdvancementBatch)
+
+		stmt, err := db.Prepare(`INSERT INTO conciliation (
+					batch,
+					pspReference,
+					pspModification,
+					dateTransaction,
+					advancement,
+					advancementBatch,
+					advancementCode,
+					grossCredit,
+					grossDebit,
+					netCredit,
+					netDebit,
+					commissionAdyen,
+					commissionBS,
+					dbValue,
+					flag,
+					dc) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+
+		checkErr(err)
+
+		_, err = stmt.Exec(xlsxFull[count].Batch, xlsxFull[count].PSPReference, xlsxFull[count].PSPModification,
+			DateTransaction.Format("2006-01-02 15:04:05"), xlsxFull[count].Advancement, xlsxFull[count].AdvancementBatch, xlsxFull[count].AdvancementCode,
+			xlsxFull[count].GrossCredit, xlsxFull[count].GrossDebit, xlsxFull[count].NetCredit, xlsxFull[count].NetDebit,
+			xlsxFull[count].Commission, commissionBS, xlsxFull[count].DBvalue, xlsxFull[count].Flag, dc)
+		checkErr(err)
+
+		fmt.Println(count)
+
+		count++
+	}
 }
 
 // ReconciliationAdyen ...
@@ -221,6 +343,7 @@ func GenerateXLSX(xlsxFull []models.XLSX, sumXLSX models.SumXLSX, dbValues []mod
 	xlsx.DeleteSheet("Sheet1")
 
 	styleHeader, _ := xlsx.NewStyle(`{"fill":{"type":"pattern","color":["#81BEF7"],"pattern":1}}`)
+	
 
 	xlsx.SetCellValue("Details", "A1", "Batch")
 	xlsx.SetCellValue("Details", "B1", "PSP Reference")
@@ -434,6 +557,50 @@ func GenerateXLSX(xlsxFull []models.XLSX, sumXLSX models.SumXLSX, dbValues []mod
 		i++
 	}
 	xlsx.SetColWidth("CheckDB", "A", "C", 22)
+
+
+	xlsx.NewSheet("Conciliation")
+	xlsx.SetCellValue("Conciliation", "A1", "Advancement Code")
+	xlsx.SetCellValue("Conciliation", "B1", "DB")
+	xlsx.SetCellValue("Conciliation", "C1", "Adyen")
+	xlsx.SetCellValue("Conciliation", "D1", "BS Turbi")
+	xlsx.SetCellValue("Conciliation", "E1", "BS")
+
+	//styleRed, _ := xlsx.NewStyle(`{"fill":{"type":"pattern","pattern":1,"fontcolor":["#FF0000"]}}`)
+	styleRed, _ := xlsx.NewStyle(`{"font":{"color":"#FF0000"}}`)
+
+	xlsx.SetPanes("Conciliation", `{"freeze":true,"split":false,"x_split":0,"y_split":1,"top_left_cell":"B1","active_pane":"topRight"}`)
+	xlsx.SetCellStyle("Conciliation", "A1", "E1", styleHeader)
+
+	// sort Conciliation
+	sort.Slice(AnalisysRFS[:], func(i, j int) bool {
+		return AnalisysRFS[i].AdvancementCode < AnalisysRFS[j].AdvancementCode
+	})
+
+	i = 0
+	line = 2
+	for i < len(AnalisysRFS) {
+		if AnalisysRFS[i].AdvancementCode != 0 {
+			xlsx.SetCellValue("Conciliation", "A"+strconv.Itoa(line), AnalisysRFS[i].AdvancementCode)
+			xlsx.SetCellValue("Conciliation", "B"+strconv.Itoa(line), AnalisysRFS[i].DB)
+			xlsx.SetCellValue("Conciliation", "C"+strconv.Itoa(line), AnalisysRFS[i].Adyen)
+			xlsx.SetCellValue("Conciliation", "D"+strconv.Itoa(line), AnalisysRFS[i].BSTurbi)
+			xlsx.SetCellValue("Conciliation", "E"+strconv.Itoa(line), AnalisysRFS[i].BSReal)	
+			
+			xlsx.SetCellStyle("Conciliation", "B"+strconv.Itoa(line), "E"+strconv.Itoa(line), styleNumber)
+
+			if (AnalisysRFS[i].BSTurbi != AnalisysRFS[i].BSReal){
+				xlsx.SetCellStyle("Conciliation", "A"+strconv.Itoa(line), "E"+strconv.Itoa(line), styleRed)
+			}
+			
+			line++
+		}
+		i++
+	}
+
+	xlsx.SetColWidth("Conciliation", "A", "A", 20)
+	xlsx.SetColWidth("Conciliation", "B", "E", 12)
+
 
 	err := xlsx.SaveAs("./TurbiFinancial.xlsx")
 	if err != nil {
