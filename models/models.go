@@ -22,9 +22,13 @@ type XLSX struct {
 type AnalysisLot struct {
 	AdvancementCode int64
 	DB              float64
+	CommissionAdyen float64
 	Adyen           float64
-	BSTurbi         float64
+	CommissionBS    float64
+	BSTurbi         float64	
 	BSReal          float64
+	DataAnt         string
+	DataPag         string
 }
 
 // SumXLSX ...
